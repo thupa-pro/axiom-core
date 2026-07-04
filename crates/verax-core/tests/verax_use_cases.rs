@@ -1,4 +1,5 @@
 use ml_dsa::Keypair;
+use sha2::Digest as _;
 use verax_core::{
     Artifact, CompositePublicKey, Error, Predicate, ShreddingKey, Statement, TrustStore,
     VeraxPayload, blake3,
@@ -6,6 +7,171 @@ use verax_core::{
     decrypt_pii, encrypt_pii, hash_ciphertext, shredding_commit, verify_statement,
     verify_statement_ed25519,
 };
+
+/// An append‑only mock transparency log that builds real Merkle trees.
+///
+/// All leaves are stored and never removed.  The Merkle tree is a perfect
+/// binary tree (padded to the next power of two with zero hashes), making it
+/// compatible with [`LogInclusionProof::verify`] which expects a sibling at
+/// every level.
+struct MockLog {
+    sk: ed25519_dalek::SigningKey,
+    leaves: Vec<[u8; 32]>,
+    /// Cached root hash of the current tree.
+    root: [u8; 32],
+    /// Cached tree — each level is a slice of the flattened level vector.
+    /// `levels[0]` is the leaf‑hash level, `levels[last]` is the root.
+    levels: Vec<Vec<[u8; 32]>>,
+}
+
+impl MockLog {
+    fn new(sk: ed25519_dalek::SigningKey) -> Self {
+        Self {
+            sk,
+            leaves: Vec::new(),
+            root: [0u8; 32],
+            levels: Vec::new(),
+        }
+    }
+
+    fn log_pubkey(&self) -> [u8; 32] {
+        self.sk.verifying_key().to_bytes()
+    }
+
+    fn log_id(&self) -> [u8; 32] {
+        blake3(&self.log_pubkey())
+    }
+
+    /// Append a leaf (BLAKE3 hash of the payload) and rebuild the tree.
+    fn append(&mut self, leaf: [u8; 32]) {
+        self.leaves.push(leaf);
+        self.rebuild();
+    }
+
+    /// Build the Merkle tree from scratch.  Pads to the next power of two
+    /// so that [`LogInclusionProof::verify`] works correctly.
+    fn rebuild(&mut self) {
+        if self.leaves.is_empty() {
+            self.levels.clear();
+            self.root = [0u8; 32];
+            return;
+        }
+        let n = self.leaves.len().next_power_of_two();
+        let mut level: Vec<[u8; 32]> = (0..n)
+            .map(|i| {
+                if i < self.leaves.len() {
+                    sha256_leaf_node(&self.leaves[i])
+                } else {
+                    [0u8; 32]
+                }
+            })
+            .collect();
+        self.levels.clear();
+        while level.len() > 1 {
+            self.levels.push(level.clone());
+            level = level
+                .chunks_exact(2)
+                .map(|chunk| sha256_node(&chunk[0], &chunk[1]))
+                .collect();
+        }
+        self.root = level[0];
+        self.levels.push(vec![self.root]);
+    }
+
+    /// Number of leaves in the log.
+    fn tree_size(&self) -> u64 {
+        self.leaves.len() as u64
+    }
+
+    /// Current root hash of the Merkle tree.
+    fn root_hash(&self) -> [u8; 32] {
+        self.root
+    }
+
+    /// Generate a signed tree head for the current state.
+    fn sth(&self, timestamp: u64) -> SignedTreeHead {
+        use ed25519_dalek::ed25519::signature::Signer;
+        let mut data = Vec::new();
+        data.extend_from_slice(&timestamp.to_be_bytes());
+        data.extend_from_slice(&self.tree_size().to_be_bytes());
+        data.extend_from_slice(&self.root);
+        let sig: ed25519_dalek::Signature = self.sk.sign(&data);
+        SignedTreeHead::new(
+            timestamp,
+            self.tree_size(),
+            self.root,
+            sig.to_bytes().to_vec(),
+            self.log_pubkey().to_vec(),
+        )
+    }
+
+    /// Return the inclusion proof for leaf at `leaf_index`.
+    fn proof(&self, leaf_index: u64) -> LogInclusionProof {
+        let mut siblings = Vec::new();
+        let n_padded = self.leaves.len().next_power_of_two();
+        if n_padded == 0 {
+            return LogInclusionProof {
+                leaf_index,
+                siblings,
+            };
+        }
+        // Build the full padded leaf level
+        let mut layer: Vec<[u8; 32]> = (0..n_padded)
+            .map(|i| {
+                if (i as usize) < self.leaves.len() {
+                    sha256_leaf_node(&self.leaves[i])
+                } else {
+                    [0u8; 32]
+                }
+            })
+            .collect();
+        let mut idx = leaf_index as usize;
+        while layer.len() > 1 {
+            let sibling_idx = if idx % 2 == 0 { idx + 1 } else { idx - 1 };
+            if sibling_idx < layer.len() {
+                siblings.push(layer[sibling_idx]);
+            }
+            // Build next layer
+            layer = layer
+                .chunks_exact(2)
+                .map(|chunk| sha256_node(&chunk[0], &chunk[1]))
+                .collect();
+            idx /= 2;
+        }
+        LogInclusionProof {
+            leaf_index: leaf_index as u64,
+            siblings,
+        }
+    }
+
+    /// Create an anchor for the given payload hash, returning the anchor.
+    fn anchor(&self, payload_hash: &[u8; 32]) -> Option<TemporalAnchor> {
+        let pos = self.leaves.iter().position(|h| h == payload_hash)?;
+        let proof = self.proof(pos as u64);
+        let sth = self.sth(1700000000);
+        Some(TemporalAnchor {
+            inclusion_proof: proof,
+            signed_tree_head: sth,
+        })
+    }
+}
+
+fn sha256_leaf_node(data: &[u8; 32]) -> [u8; 32] {
+    sha2::Sha256::new()
+        .chain_update([0x00u8])
+        .chain_update(data)
+        .finalize()
+        .into()
+}
+
+fn sha256_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    sha2::Sha256::new()
+        .chain_update([0x01u8])
+        .chain_update(left)
+        .chain_update(right)
+        .finalize()
+        .into()
+}
 
 struct TestTrust {
     key: ed25519_dalek::VerifyingKey,
@@ -50,62 +216,26 @@ fn sign_sk(seed: u8) -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
 }
 
-fn sha256_leaf(leaf: &[u8; 32]) -> [u8; 32] {
-    use sha2::Digest;
-    sha2::Sha256::new()
-        .chain_update([0x00u8])
-        .chain_update(leaf)
-        .finalize()
-        .into()
-}
-
-fn make_log_sth(root: &[u8; 32], sk: &ed25519_dalek::SigningKey) -> SignedTreeHead {
-    let timestamp = 1700000000u64;
-    let tree_size = 1u64;
-    let mut data = Vec::new();
-    data.extend_from_slice(&timestamp.to_be_bytes());
-    data.extend_from_slice(&tree_size.to_be_bytes());
-    data.extend_from_slice(root);
-    use ed25519_dalek::ed25519::signature::Signer;
-    let sig: ed25519_dalek::Signature = sk.sign(&data);
-    let log_pubkey = sk.verifying_key().to_bytes().to_vec();
-    SignedTreeHead::new(
-        timestamp,
-        tree_size,
-        *root,
-        sig.to_bytes().to_vec(),
-        log_pubkey,
-    )
-}
-
 fn sign_and_anchor(
     payload: &VeraxPayload,
     sk: &ed25519_dalek::SigningKey,
     log_sk: &ed25519_dalek::SigningKey,
 ) -> Statement {
+    let mut log = MockLog::new(log_sk.clone());
     let payload_hash = blake3(&payload.encode());
-    let ct_root = sha256_leaf(&payload_hash);
-    let proof = LogInclusionProof {
-        leaf_index: 0,
-        siblings: Vec::new(),
-    };
-    assert!(proof.verify(&payload_hash, &ct_root));
-    let sth = make_log_sth(&ct_root, log_sk);
-    let anchor = TemporalAnchor {
-        inclusion_proof: proof,
-        signed_tree_head: sth,
-    };
+    log.append(payload_hash);
+    let anchor = log.anchor(&payload_hash).unwrap();
     Statement::sign_ed25519_and_anchor(payload, sk, &anchor).unwrap()
 }
 
 // ─── Use Case 1: Digital Fingerprints ───────────────────────────────────────
-// Axiom identifies files by their BLAKE3 hash (digital fingerprint),
+// Verax identifies files by their BLAKE3 hash (digital fingerprint),
 // not by location. A single changed byte produces a completely different
 // fingerprint, making tampering detectable.
 
 #[test]
 fn use_case_1_digital_fingerprints() {
-    let data = b"Axiom Protocol - Digital Notary";
+    let data = b"Verax Protocol - Digital Notary";
 
     let artifact = Artifact::new(data);
     assert_eq!(
@@ -147,7 +277,7 @@ fn use_case_1_digital_fingerprints() {
 }
 
 // ─── Use Case 2: Family Tree of Files (Lineage / DAG) ──────────────────────
-// Axiom never erases history. Each statement points to its predecessor via
+// Verax never erases history. Each statement points to its predecessor via
 // the "lineage" field, forming an immutable family tree (DAG).
 
 #[test]
@@ -211,7 +341,7 @@ fn use_case_2_family_tree() {
 }
 
 // ─── Use Case 3: Public Logbook (CT Temporal Anchoring) ────────────────────
-// Instead of a blockchain, Axiom anchors statements in an RFC 9162
+// Instead of a blockchain, Verax anchors statements in an RFC 9162
 // Transparency Log. This provides a mathematical proof of time without
 // tokens, miners, or gas fees.
 
@@ -238,7 +368,7 @@ fn use_case_3_public_logbook() {
 }
 
 // ─── Use Case 4: The 8 Basic Verbs (Predicates) ────────────────────────────
-// Axiom's core only understands 8 predicates. Domain-specific metadata
+// Verax's core only understands 8 predicates. Domain-specific metadata
 // (HIPAA, FDA, etc.) goes in the extensions map (sticky notes).
 
 #[test]
@@ -294,6 +424,7 @@ fn use_case_4_all_predicates() {
 
     let mut chunk1 = VeraxPayload::new(stream_id, Predicate::Appends);
     chunk1.lineage = Some(h0);
+    chunk1.object = Some(h0);
     let stmt1 = sign_and_anchor(&chunk1, &issuer, &log_sk);
 
     let mut chain_store = TestTrust::new(&issuer, &log_sk);
@@ -305,7 +436,7 @@ fn use_case_4_all_predicates() {
 }
 
 // ─── Use Case 5: Right to be Forgotten (Cryptographic Shredding) ────────────
-// Instead of erasing immutable history, Axiom encrypts PII with a dedicated
+// Instead of erasing immutable history, Verax encrypts PII with a dedicated
 // key and stores only the ciphertext. When the key is destroyed (zeroized),
 // the data is mathematically unrecoverable — the "safe" remains but the key
 // is gone.
@@ -368,6 +499,107 @@ fn use_case_offline_verification() {
         .unwrap();
     assert_eq!(decoded.subject, blake3(b"offline_doc"));
     assert_eq!(decoded.predicate, Predicate::Authors);
+}
+
+// ─── Multi-leaf CT log ──────────────────────────────────────────────────────
+// Verifies that MockLog correctly builds Merkle trees with multiple leaves
+// and produces inclusion proofs that pass verification.
+
+#[test]
+fn use_case_multi_leaf_ct_log() {
+    let issuer = sign_sk(0x10);
+    let log_sk = sign_sk(0x99);
+    let vk = issuer.verifying_key();
+    let log_key_bytes = log_sk.verifying_key().to_bytes();
+
+    // Append 3 statements to the same log
+    let mut log = MockLog::new(log_sk.clone());
+
+    let p0 = VeraxPayload::new(blake3(b"leaf0"), Predicate::Attests);
+    let p1 = VeraxPayload::new(blake3(b"leaf1"), Predicate::Authors);
+    let p2 = VeraxPayload::new(blake3(b"leaf2"), Predicate::Endorses);
+
+    let h0 = blake3(&p0.encode());
+    let h1 = blake3(&p1.encode());
+    let h2 = blake3(&p2.encode());
+
+    log.append(h0);
+    assert_eq!(log.tree_size(), 1, "1 leaf");
+    let a0 = log.anchor(&h0).unwrap();
+    assert_eq!(a0.signed_tree_head.tree_size, 1);
+    // tree has 1 leaf → padded to next_power_of_two(1)=1 → root must match
+    let expected_root0 = sha256_leaf_node(&h0);
+    assert_eq!(a0.signed_tree_head.root_hash, expected_root0);
+
+    log.append(h1);
+    assert_eq!(log.tree_size(), 2, "2 leaves");
+    let a1 = log.anchor(&h1).unwrap();
+    assert_eq!(a1.signed_tree_head.tree_size, 2);
+    // leaves = [h0, h1] → no padding needed since 2 is a power of 2
+    let expected_root1 = sha256_node(&sha256_leaf_node(&h0), &sha256_leaf_node(&h1));
+    assert_eq!(a1.signed_tree_head.root_hash, expected_root1);
+    // Inclusion proof must verify
+    assert!(a1.inclusion_proof.verify(&h1, &expected_root1));
+    // Non-leaf (h2 not yet added) must NOT be findable
+    assert!(log.anchor(&h2).is_none(), "h2 not yet in log");
+
+    log.append(h2);
+    assert_eq!(log.tree_size(), 3, "3 leaves");
+    let a2 = log.anchor(&h2).unwrap();
+    assert_eq!(a2.signed_tree_head.tree_size, 3);
+    // 3 leaves → padded to next_power_of_two(3)=4 with zero hashes
+    let leaf_nodes: Vec<[u8; 32]> = (0..4)
+        .map(|i| match i {
+            0 => sha256_leaf_node(&h0),
+            1 => sha256_leaf_node(&h1),
+            2 => sha256_leaf_node(&h2),
+            _ => [0u8; 32],
+        })
+        .collect();
+    let l1_0 = sha256_node(&leaf_nodes[0], &leaf_nodes[1]);
+    let l1_1 = sha256_node(&leaf_nodes[2], &leaf_nodes[3]);
+    let expected_root2 = sha256_node(&l1_0, &l1_1);
+    assert_eq!(a2.signed_tree_head.root_hash, expected_root2);
+    // Inclusion proof must verify for all 3 leaves
+    assert!(a2.inclusion_proof.verify(&h2, &expected_root2));
+
+    // Verify that leaf[0] also gets a correct proof from the 3-leaf tree
+    // (regression: ensure mock doesn't only support the last leaf)
+    let a0_v2 = log.anchor(&h0).unwrap();
+    assert!(a0_v2.inclusion_proof.verify(&h0, &expected_root2));
+
+    // Full verification via verify_statement
+    let stmt0 = Statement::sign_ed25519_and_anchor(&p0, &issuer, &a0_v2).unwrap();
+
+    struct MultiLeafStore {
+        vk: ed25519_dalek::VerifyingKey,
+        log_key: [u8; 32],
+    }
+    impl TrustStore for MultiLeafStore {
+        fn resolve_key(&self, _: &[u8]) -> Option<ed25519_dalek::VerifyingKey> {
+            Some(self.vk)
+        }
+        fn resolve_composite_key(&self, _: &[u8]) -> Option<CompositePublicKey> {
+            None
+        }
+        fn fetch_statement(&self, _: &[u8; 32]) -> Option<Vec<u8>> {
+            None
+        }
+        fn is_revoked_in_log(&self, _: &[u8; 32], _: u64) -> Option<bool> {
+            Some(false)
+        }
+        fn resolve_log_pubkey(&self, log_id: &[u8; 32], candidate_key: &[u8; 32]) -> Option<[u8; 32]> {
+            let computed = blake3(&self.log_key);
+            if &computed == log_id && &self.log_key == candidate_key {
+                Some(self.log_key)
+            } else {
+                None
+            }
+        }
+    }
+    let store = MultiLeafStore { vk, log_key: log_key_bytes };
+    let result = verify_statement(stmt0.to_bytes(), &store);
+    assert!(result.is_ok(), "leaf from multi-leaf CT log verifies");
 }
 
 // ─── Quantum-ready composite signatures ────────────────────────────────────
@@ -461,17 +693,10 @@ fn use_case_ct_anchored_composite() {
     // Build anchor first, then sign composite with anchor embedded
     let mut payload = VeraxPayload::new(blake3(b"ct_composite_doc"), Predicate::DerivedFrom);
     payload.object = Some(blake3(b"original_source"));
+    let mut log = MockLog::new(log_sk.clone());
     let payload_hash = blake3(&payload.encode());
-    let ct_root = sha256_leaf(&payload_hash);
-    let proof = LogInclusionProof {
-        leaf_index: 0,
-        siblings: Vec::new(),
-    };
-    let sth = make_log_sth(&ct_root, &log_sk);
-    let anchor = TemporalAnchor {
-        inclusion_proof: proof,
-        signed_tree_head: sth,
-    };
+    log.append(payload_hash);
+    let anchor = log.anchor(&payload_hash).unwrap();
     let stmt = Statement::sign_composite_and_anchor(&payload, &ed_sk, &ml_sk, &anchor).unwrap();
 
     let ml_vk = ml_sk.verifying_key();

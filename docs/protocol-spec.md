@@ -53,21 +53,31 @@ COSE_Sign1 = [
 
 ### Algorithm IDs
 
-| ID  | Algorithm |
-|-----|-----------|
-| -8  | Ed25519 (COSE pre-standard) |
-| -39 | Composite Ed25519 + ML-DSA-65 |
+| ID  | Algorithm | KID | Signature |
+|-----|-----------|-----|-----------|
+| -8  | Ed25519 (COSE pre-standard) | Raw 32-byte verifying key | 64 bytes (Ed25519 pure) |
+| -39 | Composite Ed25519 + ML-DSA-65 | BLAKE3(ML-DSA-65_pk \|\| Ed25519_pk) — 32 bytes | 3373 bytes = ML-DSA-65 (3309) \|\| Ed25519 (64) |
 
 ### Unprotected Header
 
-For anchored statements, the unprotected header contains:
+For anchored statements, the unprotected header contains a CBOR map with exactly two string-keyed entries, in this fixed order:
 
 | Key                    | Value           | Description |
 |------------------------|-----------------|-------------|
 | log_inclusion_proof    | bstr (CBOR map) | Merkle inclusion proof |
 | log_sth                | bstr (CBOR map) | Signed tree head |
 
-The `anchor_hash` field in the payload is BLAKE3(payload_hash). This cryptographically binds the unprotected header to the signed payload (T1 fix).
+The unprotected header is a CBOR map with tstr keys. Keys are written in the fixed order above (not numerically sorted, since tstr keys have no natural numeric ordering). The `anchor_hash` field in the payload is BLAKE3(unprotected_header). This cryptographically binds the unprotected header to the signed payload (T1 fix).
+
+### Composite Signature Details
+
+Algorithm ID -39 represents a hybrid Ed25519ph + ML-DSA-65 signature:
+
+- **KID derivation**: `BLAKE3(ML-DSA-65_public_key (1952 bytes) || Ed25519_public_key (32 bytes))`
+- **Signature byte order**: ML-DSA-65 (3309 bytes, per FIPS 204 Level 3) followed by Ed25519 (64 bytes, Ed25519ph with context `b"Verax-Provenance-v1"`) — total 3373 bytes
+- **Verification mode**: `Hybrid` requires both components to pass. `ClassicalOnly` skips ML-DSA-65, `PQOnly` skips Ed25519
+- **Ed25519** uses Ed25519ph (pre-hashed) with SHA-512 and context string `b"Verax-Provenance-v1"` applied to the Sig_structure
+- **ML-DSA-65** uses pure (non-pre-hashed) mode applied to the same Sig_structure bytes
 
 ## Determinism Guarantees
 
@@ -168,4 +178,5 @@ Key rotation is expressed as a chain of statements:
 
 1. A statement with the old key attests to the new public key.
 2. Verification follows the rotation chain: old → new, bounded by `MAX_ROTATION_DEPTH=100`.
-3. The chain is resolved iteratively to prevent stack overflow (T3 fix).
+3. The chain is resolved iteratively with a visited-set cycle detector (T3 fix). If a cycle is detected (a KID is visited twice), the chain is rejected.
+4. Each SUPERSEDES statement in the chain is verified against the previous key's signature.

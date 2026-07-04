@@ -2,7 +2,7 @@
 //!
 //! Content-addressed artifact hashing. An [`Artifact`] wraps a BLAKE3 hash and
 //! provides verification that a given byte slice matches the hash. This is used
-//! throughout the Axiom protocol for content-addressed references: statements
+//! throughout the Verax protocol for content-addressed references: statements
 //! refer to other statements by their BLAKE3 hash, and artifacts provide the
 //! primitive to check that fetched content matches the expected hash.
 
@@ -13,7 +13,7 @@ use crate::hash;
 ///
 /// `Artifact` represents a commitment to a piece of data: given the hash,
 /// you can later verify that some data matches it. This is the fundamental
-/// building block for content-addressed references in the Axiom graph.
+/// building block for content-addressed references in the Verax graph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Artifact {
     hash: [u8; 32],

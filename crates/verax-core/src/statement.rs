@@ -11,7 +11,7 @@ use crate::error::Result;
 use crate::predicate::Predicate;
 use alloc::vec::Vec;
 
-/// A signed Axiom statement encoded as COSE_Sign1 bytes.
+/// A signed Verax statement encoded as COSE_Sign1 bytes.
 ///
 /// The inner `cose_bytes` field is the full COSE_Sign1 tagged envelope
 /// containing the protected header (algorithm + KID), unprotected header
@@ -142,14 +142,17 @@ impl Statement {
     /// The unprotected header contains the CT anchor (`log_inclusion_proof` and
     /// `log_sth`). The payload is extended with an `anchor_hash` field that
     /// commits to the unprotected header via `BLAKE3(unprotected_header)`. The
-    /// COSE signature additionally uses `external_aad = anchor_hash` so the
-    /// unprotected header is cryptographically bound to the signature.
+    /// COSE signature additionally uses `external_aad = BLAKE3(unprotected_header)`
+    /// so the unprotected header is cryptographically bound to the signature.
     pub fn sign_ed25519_and_anchor(
         payload: &VeraxPayload,
         signing_key: &ed25519_dalek::SigningKey,
         anchor: &crate::ct::TemporalAnchor,
     ) -> Result<Self> {
         let anchor_header = build_anchor_unprotected_header(anchor);
+        let anchor_hash = crate::hash::blake3(&anchor_header);
+        let mut payload = payload.clone();
+        payload.anchor_hash = Some(anchor_hash);
         let payload_bytes = payload.encode();
         let cose_bytes = crate::cose::sign_ed25519_with_unprotected(
             &payload_bytes,
@@ -170,6 +173,8 @@ impl Statement {
         anchor: &crate::ct::TemporalAnchor,
     ) -> Result<Self> {
         let anchor_header = build_anchor_unprotected_header(anchor);
+        let mut payload = payload.clone();
+        payload.anchor_hash = Some(crate::hash::blake3(&anchor_header));
         let payload_bytes = payload.encode();
         let cose_bytes = crate::cose::sign_composite_with_unprotected(
             &payload_bytes,

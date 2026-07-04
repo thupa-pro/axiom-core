@@ -1,4 +1,4 @@
-//! COSE Sign1 envelope implementation for the Axiom Protocol.
+//! COSE Sign1 envelope implementation for the Verax Protocol.
 //!
 //! # Envelope Structure
 //!
@@ -37,7 +37,7 @@
 //! # Context String (Composite)
 //!
 //! Composite signatures use Ed25519ph (pre-hashed) with the fixed context
-//! string `b"Axiom-Provenance-v1"` passed as both the pre-hash context and
+//! string `b"Verax-Provenance-v1"` passed as both the pre-hash context and
 //! the Ed25519ph context parameter.
 //!
 //! # Verification Modes
@@ -71,7 +71,7 @@ use sha2::Digest as _;
 
 use crate::error::{Error, Result};
 
-const CONTEXT_STRING: &[u8] = b"Axiom-Provenance-v1";
+const CONTEXT_STRING: &[u8] = b"Verax-Provenance-v1";
 
 fn build_protected_header(alg_id: i64, kid: &[u8]) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -283,7 +283,7 @@ pub(crate) fn sign_ed25519_with_unprotected(
 /// # let seed = [0x42u8; 32];
 /// # let sk = SigningKey::from_bytes(&seed);
 /// # let vk = sk.verifying_key();
-/// let payload = b"Hello, Axiom!";
+/// let payload = b"Hello, Verax!";
 /// let cose = sign_ed25519(payload, &sk).unwrap();
 /// let extracted = parse_and_verify_ed25519(&cose, &vk).unwrap();
 /// assert_eq!(extracted, payload);
@@ -362,7 +362,7 @@ pub(crate) fn sign_composite_with_unprotected(
 /// COSE_Sign1 envelope (tag 98, algorithm -39).
 ///
 /// The KID is `BLAKE3(ml_pk || ed_pk)`. Ed25519ph uses the context string
-/// `b"Axiom-Provenance-v1"`. The unprotected header is an empty CBOR map.
+/// `b"Verax-Provenance-v1"`. The unprotected header is an empty CBOR map.
 ///
 /// # Example
 ///
@@ -377,7 +377,7 @@ pub(crate) fn sign_composite_with_unprotected(
 /// # let ml_sk = MlDsaSk::<MlDsa65>::from_seed(&ml_seed);
 /// # let ml_vk = ml_sk.expanded_key().verifying_key();
 /// # let pubkey = composite_pubkey(&ed_vk, &ml_vk);
-/// let payload = b"Hello, Axiom!";
+/// let payload = b"Hello, Verax!";
 /// let cose = sign_composite(payload, &ed_sk, &ml_sk).unwrap();
 /// let extracted = parse_and_verify_composite(&cose, &pubkey,
 ///     VerificationMode::Hybrid).unwrap();
@@ -468,7 +468,7 @@ pub struct CompositePublicKey {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompositeSignature {
     /// 64-byte Ed25519 signature (Ed25519ph mode with
-    /// `b"Axiom-Provenance-v1"` context).
+    /// `b"Verax-Provenance-v1"` context).
     pub ed25519_sig: [u8; 64],
     /// 3309-byte ML-DSA-65 encoded signature.
     pub mldsa65_sig: [u8; MLDSA65_SIG_SIZE],
@@ -512,7 +512,7 @@ impl CompositeSignature {
 /// Create a composite (Ed25519ph + ML-DSA-65) signature over the given
 /// data without encoding it as a COSE envelope.
 ///
-/// Ed25519ph is used with the context string `b"Axiom-Provenance-v1"`.
+/// Ed25519ph is used with the context string `b"Verax-Provenance-v1"`.
 /// The ML-DSA-65 signature is computed over the raw data directly.
 ///
 /// Returns a [`CompositeSignature`] struct. Use
@@ -544,7 +544,7 @@ pub fn composite_sign(
 ///
 /// In [`Hybrid`](VerificationMode::Hybrid) mode:
 /// - Ed25519 is verified using Ed25519ph with context
-///   `b"Axiom-Provenance-v1"` and SHA-512 pre-hash of the data.
+///   `b"Verax-Provenance-v1"` and SHA-512 pre-hash of the data.
 /// - ML-DSA-65 is verified over the raw data directly.
 ///
 /// In [`ClassicalOnly`](VerificationMode::ClassicalOnly) mode the ML-DSA-65
@@ -647,7 +647,7 @@ pub fn parse_and_verify_mldsa65_only(
 /// Extract the KID (key identifier) from a COSE Sign1 envelope.
 ///
 /// The KID is stored in the protected header as CBOR map key 4.
-/// For Axiom statements, this is the 32-byte Ed25519 public key
+/// For Verax statements, this is the 32-byte Ed25519 public key
 /// (or [`BLAKE3`](crate::hash::blake3) of the concatenated ML-DSA-65 and
 /// Ed25519 public keys for composite signatures).
 pub fn extract_kid(data: &[u8]) -> Result<Vec<u8>> {

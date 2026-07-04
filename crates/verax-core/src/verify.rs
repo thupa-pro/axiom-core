@@ -1,6 +1,6 @@
 //! # Statement Verification Pipeline
 //!
-//! This module implements the full Axiom statement verification pipeline:
+//! This module implements the full Verax statement verification pipeline:
 //!
 //! 1. **Decode** — Parse raw COSE_Sign1 bytes into a [`Statement`].
 //! 2. **CBOR Determinism** — Verify the payload uses canonical CBOR encoding
@@ -46,6 +46,7 @@ use crate::ct;
 use crate::error::{Error, Result};
 use crate::predicate::Predicate;
 use crate::statement::Statement;
+use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::vec::Vec;
 
@@ -150,6 +151,15 @@ pub trait TrustStore {
     /// - `None` — status unknown (offline, no cache, or log not monitored)
     fn is_revoked_in_log(&self, stmt_hash: &[u8; 32], after_timestamp: u64) -> Option<bool>;
 
+    /// Returns the revocation status of a key in the log.
+    /// - `Some(true)` — key is revoked (definitive)
+    /// - `Some(false)` — key is NOT revoked (definitive)
+    /// - `None` — status unknown (offline, no cache, or log not monitored)
+    fn is_key_revoked(&self, kid: &[u8; 32]) -> Option<bool> {
+        let _ = kid;
+        None
+    }
+
     /// Resolve a log's trusted public key given its log ID and candidate key.
     ///
     /// Returns `Some(trusted_key)` if the candidate is accepted, `None` otherwise.
@@ -182,8 +192,14 @@ pub fn resolve_rotated_key_default(
         return None;
     }
     let mut current_kid: [u8; 32] = kid.try_into().ok()?;
+    let mut visited: BTreeSet<[u8; 32]> = BTreeSet::new();
+    visited.insert(current_kid);
     for _ in 0..MAX_ROTATION_DEPTH {
         if let Some(pk) = store.resolve_key(&current_kid) {
+            // Terminal key found — reject if revoked
+            if matches!(store.is_key_revoked(&current_kid), Some(true)) {
+                return None;
+            }
             return Some(pk);
         }
         let kid_hash = crate::hash::blake3(&current_kid);
@@ -193,7 +209,18 @@ pub fn resolve_rotated_key_default(
         if payload.predicate != Predicate::Supersedes {
             return None;
         }
+        // Validate SUPERSEDES subject == BLAKE3(successor_kid)
+        if payload.subject != kid_hash {
+            return None;
+        }
         let prev_kid: [u8; 32] = payload.object?;
+        if !visited.insert(prev_kid) {
+            return None;
+        }
+        // Reject if the predecessor (signing) key has been revoked
+        if matches!(store.is_key_revoked(&prev_kid), Some(true)) {
+            return None;
+        }
         let prev_pk = store.resolve_key(&prev_kid)?;
         cose::parse_and_verify_ed25519(&stmt_bytes, &prev_pk).ok()?;
         current_kid = prev_kid;
@@ -251,6 +278,14 @@ pub fn verify_statement_with_warnings(
             let pubkey = trust_anchors
                 .resolve_rotated_key(&kid)
                 .ok_or_else(|| Error::Crypto("unknown key ID".into()))?;
+            // Check that the resolved key has not been revoked
+            if kid.len() == 32 {
+                let mut kid_arr = [0u8; 32];
+                kid_arr.copy_from_slice(&kid);
+                if matches!(trust_anchors.is_key_revoked(&kid_arr), Some(true)) {
+                    return Err(Error::Crypto("signing key is revoked".into()));
+                }
+            }
             cose::parse_and_verify_ed25519(cose_bytes, &pubkey)?;
         }
         -39 => {
@@ -282,6 +317,15 @@ pub fn verify_statement_with_warnings(
         {
             return Err(Error::Payload(format!(
                 "{} predicate requires an object field",
+                payload.predicate.name()
+            )));
+        }
+        // APPENDS requires object when lineage is present (non-initial chunk)
+        Predicate::Appends
+            if payload.lineage.is_some() && payload.object.is_none() =>
+        {
+            return Err(Error::Payload(format!(
+                "{} predicate requires an object field when lineage is set",
                 payload.predicate.name()
             )));
         }
@@ -346,6 +390,12 @@ pub fn verify_statement_with_warnings(
         && let Some(obj_hash) = &payload.object
         && let Some(revoked_bytes) = trust_anchors.fetch_statement(obj_hash)
     {
+        // Per spec: subject == object == BLAKE3(target)
+        if payload.subject != *obj_hash {
+            return Err(Error::Payload(
+                "REVOKES subject must equal object (BLAKE3(target))".into(),
+            ));
+        }
         let revoked_protected = cose::extract_protected(&revoked_bytes)?;
         let revoked_kid = extract_kid(&revoked_protected)?;
         if kid != revoked_kid {
@@ -407,9 +457,7 @@ pub fn verify_statement_with_warnings(
             }
         };
         if &actual_hash != expected_anchor_hash {
-            return Err(Error::InvalidLogProof(
-                "anchor hash mismatch: unprotected header does not match payload commitment".into(),
-            ));
+            return Err(Error::AnchorHashMismatch);
         }
         let a = anchor.as_ref().ok_or_else(|| {
             Error::InvalidLogProof(
@@ -449,7 +497,7 @@ pub fn verify_statement_with_warnings(
 fn verify_temporal_anchor(
     anchor: &ct::TemporalAnchor,
     payload: &VeraxPayload,
-    payload_bytes: &[u8],
+    _payload_bytes: &[u8],
     cose_bytes: &[u8],
     trust_anchors: &dyn TrustStore,
     warnings: &mut VerificationWarnings,
@@ -471,8 +519,13 @@ fn verify_temporal_anchor(
     let trusted_key = trust_anchors.resolve_log_pubkey(&log_id_arr, &candidate_key);
     anchor.verify_sth_signature(trusted_key.as_ref())?;
 
-    let payload_hash = crate::hash::blake3(payload_bytes);
-    anchor.verify_inclusion(&payload_hash)?;
+    // The CT log committed to the content hash (payload without anchor_hash).
+    // We strip anchor_hash before encoding so the inclusion proof verifies.
+    let mut content_payload = payload.clone();
+    content_payload.anchor_hash = None;
+    let content_bytes = content_payload.encode();
+    let content_hash = crate::hash::blake3(&content_bytes);
+    anchor.verify_inclusion(&content_hash)?;
 
     if let Some(stmt_ts) = payload.timestamp {
         if anchor.signed_tree_head.timestamp < stmt_ts {
@@ -2076,7 +2129,7 @@ mod tests {
         };
 
         // Revocation referencing the target with a LATER timestamp — should succeed
-        let mut revoke_payload = VeraxPayload::new([0x01; 32], Predicate::Revokes);
+        let mut revoke_payload = VeraxPayload::new(obj_hash, Predicate::Revokes);
         revoke_payload.object = Some(obj_hash);
         revoke_payload.timestamp = Some(2000);
         let revoke_stmt = Statement::sign_ed25519(&revoke_payload, &sk).unwrap();
@@ -2086,7 +2139,7 @@ mod tests {
         );
 
         // Revocation with EARLIER timestamp — should fail
-        let mut early_payload = VeraxPayload::new([0x01; 32], Predicate::Revokes);
+        let mut early_payload = VeraxPayload::new(obj_hash, Predicate::Revokes);
         early_payload.object = Some(obj_hash);
         early_payload.timestamp = Some(500);
         let early_stmt = Statement::sign_ed25519(&early_payload, &sk).unwrap();
@@ -2096,7 +2149,7 @@ mod tests {
         );
 
         // Revocation with SAME timestamp — should fail
-        let mut same_payload = VeraxPayload::new([0x01; 32], Predicate::Revokes);
+        let mut same_payload = VeraxPayload::new(obj_hash, Predicate::Revokes);
         same_payload.object = Some(obj_hash);
         same_payload.timestamp = Some(1000);
         let same_stmt = Statement::sign_ed25519(&same_payload, &sk).unwrap();
@@ -2170,41 +2223,48 @@ mod tests {
     // ── Error Code Mapping Tests (7.2) ──
 
     #[test]
-    fn test_error_code_16_encode() {
-        // Code 16 maps from Error::Encode
-        let err = Error::Encode("test encode error".into());
+    fn test_error_code_16_recovery_policy() {
+        let err = Error::RecoveryPolicyViolation("guardian not in policy".into());
         let code = match &err {
-            Error::Encode(_) => 16i32,
+            Error::RecoveryPolicyViolation(_) => 16i32,
             _ => unreachable!(),
         };
         assert_eq!(code, 16);
     }
 
     #[test]
-    fn test_error_code_17_spec_error() {
-        // Code 17 maps from Error::AnchorHashMismatch or LineageDepthExceeded
-        for err in &[Error::AnchorHashMismatch, Error::LineageDepthExceeded] {
-            let code = match err {
-                Error::AnchorHashMismatch | Error::LineageDepthExceeded => 17i32,
-                _ => unreachable!(),
-            };
-            assert_eq!(code, 17);
-        }
+    fn test_error_code_17_anchor_hash_mismatch() {
+        let err = Error::AnchorHashMismatch;
+        let code = match err {
+            Error::AnchorHashMismatch => 17i32,
+            _ => unreachable!(),
+        };
+        assert_eq!(code, 17);
     }
 
     #[test]
-    fn test_error_code_18_recovery_policy() {
-        let err = Error::RecoveryPolicyViolation("guardian not in policy".into());
-        let code = match &err {
-            Error::RecoveryPolicyViolation(_) => 18i32,
+    fn test_error_code_18_lineage_depth() {
+        let err = Error::LineageDepthExceeded;
+        let code = match err {
+            Error::LineageDepthExceeded => 18i32,
             _ => unreachable!(),
         };
         assert_eq!(code, 18);
     }
 
+    #[test]
+    fn test_error_code_19_encode() {
+        let err = Error::Encode("test encode error".into());
+        let code = match &err {
+            Error::Encode(_) => 19i32,
+            _ => unreachable!(),
+        };
+        assert_eq!(code, 19);
+    }
+
     /// Verifies that the full FFI error-to-code mapping table is covered by tests.
     #[test]
-    fn test_all_error_codes_1_to_18() {
+    fn test_all_error_codes_1_to_19() {
         let test_cases: Vec<(Error, i32)> = vec![
             (Error::MalformedCose("".into()), 1),
             (Error::NonCanonicalEncoding, 2),
@@ -2227,10 +2287,10 @@ mod tests {
             ),
             (Error::Io("".into()), 14),
             (Error::Payload("".into()), 15),
-            (Error::Encode("".into()), 16),
+            (Error::RecoveryPolicyViolation("".into()), 16),
             (Error::AnchorHashMismatch, 17),
-            (Error::LineageDepthExceeded, 17),
-            (Error::RecoveryPolicyViolation("".into()), 18),
+            (Error::LineageDepthExceeded, 18),
+            (Error::Encode("".into()), 19),
         ];
         for (err, expected_code) in &test_cases {
             let code = match err {
@@ -2249,9 +2309,10 @@ mod tests {
                 Error::HashLength { .. } => 13,
                 Error::Io(_) => 14,
                 Error::Payload(_) => 15,
-                Error::Encode(_) => 16,
-                Error::AnchorHashMismatch | Error::LineageDepthExceeded => 17,
-                Error::RecoveryPolicyViolation(_) => 18,
+                Error::RecoveryPolicyViolation(_) => 16,
+                Error::AnchorHashMismatch => 17,
+                Error::LineageDepthExceeded => 18,
+                Error::Encode(_) => 19,
             };
             assert_eq!(
                 code, *expected_code,

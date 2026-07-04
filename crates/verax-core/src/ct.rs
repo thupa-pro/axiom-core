@@ -1,7 +1,7 @@
-//! Certificate Transparency (CT) integration for the Axiom Protocol.
+//! Certificate Transparency (CT) integration for the Verax Protocol.
 //!
 //! This module implements RFC 9162-style Merkle tree inclusion proofs and
-//! signed tree head verification, binding Axiom statements to public CT logs.
+//! signed tree head verification, binding Verax statements to public CT logs.
 //!
 //! # Overview
 //!

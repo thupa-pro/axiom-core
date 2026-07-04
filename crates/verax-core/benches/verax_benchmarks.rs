@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════
-// Axiom Protocol — Performance Benchmarks
+// Verax Protocol — Performance Benchmarks
 //
 // Scenarios:
 //   1. Deterministic Encoding Throughput (1KB, 10KB, 100KB)
@@ -554,7 +554,7 @@ fn bench_sth_freshness(c: &mut Criterion) {
 // ───────────────────────────────────────────────────────────────────────
 
 criterion_group! {
-    name = axiom_benches;
+    name = verax_benches;
     config = Criterion::default()
         .sample_size(100)
         .warm_up_time(std::time::Duration::from_secs(2))
@@ -566,4 +566,4 @@ criterion_group! {
         bench_composite_verification,
         bench_sth_freshness,
 }
-criterion_main!(axiom_benches);
+criterion_main!(verax_benches);

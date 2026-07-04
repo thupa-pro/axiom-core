@@ -1,7 +1,7 @@
 //! # HSM Abstraction Layer
 //!
 //! Provides a hardware security module (HSM) abstraction for key custody in the
-//! Axiom protocol. The [`SecureKeyStore`] trait defines the interface; private
+//! Verax protocol. The [`SecureKeyStore`] trait defines the interface; private
 //! key material never leaves the trait implementation — protocol logic interacts
 //! only through opaque [`KeyReference`] handles.
 //!
@@ -162,7 +162,7 @@ pub mod software {
 
     use super::*;
 
-    const CONTEXT_STRING: &[u8] = b"Axiom-Provenance-v1";
+    const CONTEXT_STRING: &[u8] = b"Verax-Provenance-v1";
 
     enum KeyMaterial {
         Ed25519(ed25519_dalek::SigningKey),

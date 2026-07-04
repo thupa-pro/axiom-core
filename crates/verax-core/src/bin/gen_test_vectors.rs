@@ -384,7 +384,7 @@ fn main() {
     // Output JSON
     println!("{{");
     println!(r#"  "version": "1.0.0","#);
-    println!(r#"  "description": "Axiom Protocol canonical test vectors","#);
+    println!(r#"  "description": "Verax Protocol canonical test vectors","#);
     println!(r#"  "signing_key_seed_hex": "{}","#, hex(&seed));
     println!(r#"  "signing_key_pubkey_hex": "{kid}","#);
     println!(r#"  "ml_dsa_seed_hex": "{}","#, hex(&ml_seed_bytes));

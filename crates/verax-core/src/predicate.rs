@@ -1,4 +1,4 @@
-//! Predicate types for the Axiom Protocol.
+//! Predicate types for the Verax Protocol.
 //!
 //! A predicate defines the semantic relationship between a statement's
 //! subject and object. Each predicate is encoded as a single byte in the
@@ -23,7 +23,7 @@
 
 use crate::error::{Error, Result};
 
-/// Semantic predicate for an Axiom statement.
+/// Semantic predicate for a Verax statement.
 ///
 /// Each variant encodes the relationship between the statement's subject
 /// and object. The numeric code is serialized as a single byte in the

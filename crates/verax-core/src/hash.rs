@@ -1,13 +1,13 @@
-//! BLAKE3 hashing primitives for the Axiom Protocol.
+//! BLAKE3 hashing primitives for the Verax Protocol.
 //!
-//! All content addressing in the Axiom Protocol uses **BLAKE3** (256-bit /
+//! All content addressing in the Verax Protocol uses **BLAKE3** (256-bit /
 //! 32-byte output). This module provides:
 //!
 //! * [`blake3()`] — content hash, used for all addressing (subjects, objects,
 //!   artifacts).
 //! * [`blake3_derive_key`] — domain-separated key derivation via
 //!   `blake3::derive_key`. Each domain uses a unique context string (e.g.
-//!   `"Axiom-Artifact"`, `"Axiom-Statement"`) so that keys from different
+//!   `"Verax-Artifact"`, `"Verax-Statement"`) so that keys from different
 //!   domains are unrelated.
 //! * [`hash_artifact`] — convenience wrapper for hashing artifact content.
 //! * [`verify_content_hash`] — constant-time hash verification.
@@ -16,7 +16,7 @@ const HASH_LEN: usize = 32;
 
 /// Compute the BLAKE3 content hash of arbitrary data.
 ///
-/// Used for all content-addressed identifiers in the Axiom Protocol
+/// Used for all content-addressed identifiers in the Verax Protocol
 /// (subject, object, lineage, nonce, anchor_hash, etc.). Returns a
 /// 32-byte digest.
 pub fn blake3(data: &[u8]) -> [u8; HASH_LEN] {
@@ -27,8 +27,8 @@ pub fn blake3(data: &[u8]) -> [u8; HASH_LEN] {
 ///
 /// Uses `blake3::derive_key` internally. The `context` string provides
 /// domain separation — the same `key_material` under different contexts
-/// produces unrelated outputs. Typical contexts include `"Axiom-Artifact"`,
-/// `"Axiom-Statement"`, and `"Axiom-Signature"`.
+/// produces unrelated outputs. Typical contexts include `"Verax-Artifact"`,
+/// `"Verax-Statement"`, and `"Verax-Signature"`.
 pub fn blake3_derive_key(context: &str, key_material: &[u8]) -> [u8; HASH_LEN] {
     let mut out = [0u8; HASH_LEN];
     let result = blake3::derive_key(context, key_material);
@@ -74,15 +74,15 @@ mod tests {
 
     #[test]
     fn test_derive_key_deterministic() {
-        let a = blake3_derive_key("Axiom-Artifact", b"data");
-        let b = blake3_derive_key("Axiom-Artifact", b"data");
+        let a = blake3_derive_key("Verax-Artifact", b"data");
+        let b = blake3_derive_key("Verax-Artifact", b"data");
         assert_eq!(a, b);
     }
 
     #[test]
     fn test_derive_key_domain_separation() {
-        let a = blake3_derive_key("Axiom-Artifact", b"data");
-        let b = blake3_derive_key("Axiom-Statement", b"data");
+        let a = blake3_derive_key("Verax-Artifact", b"data");
+        let b = blake3_derive_key("Verax-Statement", b"data");
         assert_ne!(a, b);
     }
 

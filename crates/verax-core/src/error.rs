@@ -1,4 +1,4 @@
-//! Error types for the Axiom Protocol core crate.
+//! Error types for the Verax Protocol core crate.
 //!
 //! All fallible operations return [`Result<T>`] (aliasing
 //! `core::result::Result<T, Error>`). The [`Error`] enum has 19 variants
@@ -139,11 +139,4 @@ impl From<ed25519_dalek::ed25519::Error> for Error {
     }
 }
 
-impl From<core::array::TryFromSliceError> for Error {
-    fn from(_: core::array::TryFromSliceError) -> Self {
-        Error::HashLength {
-            expected: 32,
-            actual: 0,
-        }
-    }
-}
+

@@ -1,4 +1,4 @@
-//! Deterministic CBOR encoding and decoding for Axiom Protocol payloads.
+//! Deterministic CBOR encoding and decoding for Verax Protocol payloads.
 //!
 //! This module implements a **strictly deterministic CBOR** subset for encoding
 //! [`VeraxPayload`] and [`RecoveryPolicy`] structures. The encoding enforces
@@ -47,7 +47,7 @@
 //!
 //! ## Reference
 //!
-//! This implementation follows the Axiom Protocol Deterministic CBOR specification
+//! This implementation follows the Verax Protocol Deterministic CBOR specification
 //! (Protocol Spec §5).
 use crate::error::{Error, Result};
 use alloc::format;

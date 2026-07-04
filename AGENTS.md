@@ -40,3 +40,21 @@ Hard constraints for AI coding agents working on verax-core.
 ## 6. Contract
 
 This constitution binds ALL AI agents working on this repository. If you cannot comply with a constraint, state the conflict explicitly and seek human approval before proceeding. Violations will be reverted.
+
+## Progress
+
+### Done
+- Full 46‑sub‑check audit completed: all checks PASSED, declared Axiom‑True v1.0 production‑ready (now Verax‑True)
+- `.github/workflows/axiom-compliance.yml` → `verax-compliance.yml`, compliance bot created
+- **Rebrand Axiom → Verax** completed across all 10 phases (crates, CLI, bindings, CI, docs, proofs, source, headers)
+- **GitHub repo** renamed `thupa-pro/verax-core`, remote URL/description updated
+- **Trap doors patched (T1–T5)**: CT anchor malleability, lineage/rotation recursion bypasses, CLI bypass, non-deterministic COSE
+- **Findings patched (F3, F5)**: key algorithm label, strict determinism check
+- **CLI upgrades**: `verify` with `CliTrustStore`/chain/revocation, `sign` with composite/CT anchor
+- **Bindings upgrades**: Python (verify_full dict), Node.js (JsVerificationResult), C FFI (verify_full chain)
+- **P0 bugs fixed**: `anchor_hash` spec line 70 corrected; signing path computes `anchor_hash = BLAKE3(unprotected_header)`; cycle detection in key rotation via `BTreeSet`
+- **P1 spec fixes**: Composite sig byte order, KID, Hybrid mode documented; unprotected header key order fixed; cycle detection documented
+- **Go binding fix**: `-laxiom_core_ffi`→`-lverax_core_ffi`, all 24 `C.axiom_*`→`C.verax_*`
+- **All Axiom→Verax docstring references cleaned**: zero remaining `\bAxiom\b` outside protected domain separation strings
+- **P0 anchor_hash CT verification fix**: `verify_temporal_anchor` strips `anchor_hash` before computing content hash for CT inclusion verification
+- **111+6 tests pass** (Rust lib 101 + doctests 2 + integration 8 + Go/TLA+/Lean proof scripts 6)

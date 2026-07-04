@@ -1,4 +1,4 @@
-//! # Axiom Cryptographic Shredding
+//! # Verax Cryptographic Shredding
 //!
 //! Implements cryptographic shredding (secure deletion) of PII using
 //! **XChaCha20-Poly1305** AEAD encryption with ephemeral key destruction.
@@ -17,7 +17,7 @@
 //! `K ← {0,1}ˡ` and `M ∈ {0,1}*` is a plaintext containing personal data.
 //!
 //! **Theorem**: If `K` is destroyed (zeroized and no copy exists) after `C` is
-//! published on the Axiom Graph, then for any probabilistic polynomial-time (PPT)
+//! published on the Verax Graph, then for any probabilistic polynomial-time (PPT)
 //! adversary `A`:
 //!
 //! ```text
@@ -54,7 +54,7 @@
 //!
 //! ## GDPR Compliance Map
 //!
-//! | GDPR Article | Requirement | Axiom Feature | Confidence |
+//! | GDPR Article | Requirement | Verax Feature | Confidence |
 //! |-------------|-------------|----------------|------------|
 //! | Art. 5(1)(c) | Data minimisation | No plaintext PII in graph; only `hash(ciphertext)` | 100% |
 //! | Art. 17 | Right to erasure | Key destruction → ciphertext indistinguishability | 100% |
@@ -118,7 +118,7 @@ impl ShreddingKey {
     }
 
     /// Stable key identifier derived as `BLAKE3(key)`. This is the hash
-    /// that can be referenced in a Axiom Statement without leaking the key.
+    /// that can be referenced in a a Verax Statement without leaking the key.
     pub fn key_id(&self) -> [u8; 32] {
         hash::blake3(&self.key)
     }
@@ -170,7 +170,7 @@ pub fn decrypt_pii(key: &ShreddingKey, encrypted: &[u8]) -> Result<Vec<u8>> {
 
 /// Compute the BLAKE3 hash of an encrypted blob.
 ///
-/// This is the content-address stored in the Axiom graph — the graph never
+/// This is the content-address stored in the Verax graph — the graph never
 /// stores plaintext, only `hash(ciphertext)`.
 pub fn hash_ciphertext(encrypted: &[u8]) -> [u8; 32] {
     hash::blake3(encrypted)
@@ -180,7 +180,7 @@ pub fn hash_ciphertext(encrypted: &[u8]) -> [u8; 32] {
 ///
 /// This is a convenience combining [`encrypt_pii`] and [`hash_ciphertext`]
 /// into a single operation. The commitment is suitable for publishing on the
-/// Axiom graph as an immutable reference to the encrypted data.
+/// Verax graph as an immutable reference to the encrypted data.
 pub fn shredding_commit(key: &ShreddingKey, plaintext: &[u8]) -> Result<(Vec<u8>, [u8; 32])> {
     let ciphertext = encrypt_pii(key, plaintext)?;
     let commitment = hash_ciphertext(&ciphertext);
@@ -199,7 +199,7 @@ pub fn shredding_commit(key: &ShreddingKey, plaintext: &[u8]) -> Result<(Vec<u8>
 /// ## Manual Escrow Fallback
 ///
 /// For human-mediated consent, export the key via `key.to_bytes()` and store
-/// it in a physical safe or offline HSM. The Axiom Graph stores only
+/// it in a physical safe or offline HSM. The Verax Graph stores only
 /// `hash(ciphertext)` and optionally `hash(public_key_id)` — never the key itself.
 pub fn hpke_encrypt_key(
     recipient_pk: &[u8; 32],
@@ -214,7 +214,7 @@ pub fn hpke_encrypt_key(
         .map_err(|e| Error::Crypto(format!("HPKE deserialize pk: {e}")))?;
 
     let mut csprng = rand_core::OsRng;
-    let info = b"axiom-shredding-key-v1";
+    let info = b"verax-shredding-key-v1";
 
     let (encapped_key, ciphertext) =
         hpke::single_shot_seal::<AesGcm256, HkdfSha384, X25519HkdfSha256, _>(
@@ -244,7 +244,7 @@ pub fn hpke_decrypt_key(
     let enc = <X25519HkdfSha256 as hpke::Kem>::EncappedKey::from_bytes(encapped_key)
         .map_err(|e| Error::Crypto(format!("HPKE deserialize encapped: {e}")))?;
 
-    let info = b"axiom-shredding-key-v1";
+    let info = b"verax-shredding-key-v1";
 
     let key_bytes = hpke::single_shot_open::<AesGcm256, HkdfSha384, X25519HkdfSha256>(
         &OpModeR::Base,
@@ -260,7 +260,7 @@ pub fn hpke_decrypt_key(
 }
 
 /// Records a cryptographic erasure event. This struct is not stored in the
-/// Axiom Graph — it represents the action taken by the data controller.
+/// Verax Graph — it represents the action taken by the data controller.
 #[derive(Debug, Clone)]
 pub struct ErasureRecord {
     /// The key identifier of the destroyed shredding key.
@@ -277,7 +277,7 @@ pub struct ErasureRecord {
 ///
 /// Step-by-step erasure following GDPR Article 17:
 ///
-/// 1. **Locate**: Query the Axiom Graph for all statements where
+/// 1. **Locate**: Query the Verax Graph for all statements where
 ///    `subject == hash(ciphertext)`. These are the references to the
 ///    encrypted PII.
 ///
@@ -336,7 +336,7 @@ pub fn erasure_protocol(key: ShreddingKey, ciphertext: &[u8], timestamp: u64) ->
 ///
 /// ## GDPR Mapping
 ///
-/// - Article 7 (Consent): Recorded as an immutable Axiom Statement
+/// - Article 7 (Consent): Recorded as an immutable a Verax Statement
 /// - Article 5(1)(c) (Data Minimisation): Only hashes and DIDs, no plaintext PII
 /// - Article 25 (Privacy by Design): Consent is a first-class protocol primitive
 pub fn create_consent_payload(
