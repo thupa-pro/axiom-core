@@ -38,6 +38,7 @@ impl MockLog {
         self.sk.verifying_key().to_bytes()
     }
 
+    #[allow(dead_code)]
     fn log_id(&self) -> [u8; 32] {
         blake3(&self.log_pubkey())
     }
@@ -84,6 +85,7 @@ impl MockLog {
     }
 
     /// Current root hash of the Merkle tree.
+    #[allow(dead_code)]
     fn root_hash(&self) -> [u8; 32] {
         self.root
     }
