@@ -3,7 +3,7 @@ name = "axiom-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Axiom Protocol CLI — prove, verify, and trace provenance chains"
+description = "Axiom Protocol CLI — sign, verify, inspect, and trace provenance chains with composite post-quantum signatures, CT log anchoring, revocation cache, and full DAG lineage walking"
 
 [dependencies]
 axiom-core = { path = "../axiom-core" }

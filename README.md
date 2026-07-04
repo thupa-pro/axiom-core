@@ -7,7 +7,7 @@
 ![Rust](https://img.shields.io/badge/rust-1.85%2B-orange)
 ![Rust Edition](https://img.shields.io/badge/edition-2024-blue)
 
-Verifiable provenance with post-quantum hybrid signatures, Certificate Transparency anchoring, and PII shredding — formally verified.
+Axiom is a minimal, tamper-evident provenance protocol using **deterministic CBOR**, **Ed25519 + ML-DSA-65 hybrid signatures** (FIPS 204), **Certificate Transparency anchoring** (RFC 9162), and **PII shredding** — with an IETF forensic audit passed, 101 tests, and Axiom-True v1.0 verification compliance. Bindings for Rust, C, Python, Node.js, and Go.
 
 ---
 

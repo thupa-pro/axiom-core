@@ -3,7 +3,7 @@ name = "axiom-core"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Axiom Protocol Core — DAG-based verifiable provenance with deterministic CBOR encoding"
+description = "Axiom Protocol Core — deterministic CBOR, Ed25519+ML-DSA-65 composite signatures, RFC 9162 CT anchoring, key rotation, revocation, PII shredding, and iterative lineage traversal. #![no_std] with #![deny(unsafe_code)]"
 
 [lib]
 crate-type = ["rlib"]
